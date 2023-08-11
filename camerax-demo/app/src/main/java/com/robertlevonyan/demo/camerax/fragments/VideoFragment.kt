@@ -1,6 +1,5 @@
 package com.robertlevonyan.demo.camerax.fragments
 
-import android.animation.ObjectAnimator
 import android.annotation.SuppressLint
 import android.content.ContentValues
 import android.content.Context
@@ -8,42 +7,26 @@ import android.content.res.Configuration
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraMetadata
 import android.hardware.display.DisplayManager
-import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
 import android.util.DisplayMetrics
 import android.util.Log
-import android.view.GestureDetector
 import android.view.View
-import android.widget.Toast
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.*
-import androidx.concurrent.futures.await
-import androidx.core.animation.doOnCancel
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.MutableLiveData
-import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.whenCreated
 import androidx.navigation.Navigation
-import coil.load
-import coil.request.ErrorResult
-import coil.request.ImageRequest
-import coil.transform.CircleCropTransformation
 import com.robertlevonyan.demo.camerax.R
 import com.robertlevonyan.demo.camerax.databinding.FragmentVideoBinding
 import com.robertlevonyan.demo.camerax.utils.*
-import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.properties.Delegates
 
 
 @ExperimentalCamera2Interop
@@ -52,9 +35,6 @@ class VideoFragment : BaseFragment<FragmentVideoBinding>(R.layout.fragment_video
     // An instance for display manager to get display change callbacks
     private val displayManager by lazy { requireContext().getSystemService(Context.DISPLAY_SERVICE) as DisplayManager }
 
-    // An instance of a helper function to work with Shared Preferences
-    private val prefs by lazy { SharedPrefsManager.newInstance(requireContext()) }
-
     private var camera: Camera? = null
     private var cameraProvider: ProcessCameraProvider? = null
     private var preview: Preview? = null
@@ -62,10 +42,6 @@ class VideoFragment : BaseFragment<FragmentVideoBinding>(R.layout.fragment_video
 
     private var displayId = -1
 
-    private val cameraCapabilities = mutableListOf<CameraCapability>()
-    private var cameraIndex = 0
-    private var qualityIndex = 3
-    private var enumerationDeferred: Deferred<Unit>? = null
     private val mainThreadExecutor by lazy { ContextCompat.getMainExecutor(requireContext()) }
     private lateinit var recordingState: VideoRecordEvent
     private val captureLiveStatus = MutableLiveData<String>()
@@ -73,50 +49,13 @@ class VideoFragment : BaseFragment<FragmentVideoBinding>(R.layout.fragment_video
     // Selector showing which camera is selected (front or back)
     private var lensFacing = CameraSelector.DEFAULT_BACK_CAMERA
 
-    // Selector showing which flash mode is selected (on, off or auto)
-    private var flashMode by Delegates.observable(ImageCapture.FLASH_MODE_OFF) { _, _, new ->
-        binding.btnFlash.setImageResource(
-            when (new) {
-                ImageCapture.FLASH_MODE_ON -> R.drawable.ic_flash_on
-                ImageCapture.FLASH_MODE_AUTO -> R.drawable.ic_flash_auto
-                else -> R.drawable.ic_flash_off
-            }
-        )
-    }
-
-    // Selector showing is grid enabled or not
-    private var hasGrid = false
-
-    // Selector showing is flash enabled or not
-    private var isTorchOn = false
 
     // Selector showing is recording currently active
     private var isRecording = false
-    private val animateRecord by lazy {
-        ObjectAnimator.ofFloat(binding.btnRecordVideo, View.ALPHA, 1f, 0.5f).apply {
-            repeatMode = ObjectAnimator.REVERSE
-            repeatCount = ObjectAnimator.INFINITE
-            doOnCancel { binding.btnRecordVideo.alpha = 1f }
-        }
-    }
-
-
-    private fun getCameraSelector(idx: Int): CameraSelector {
-        if (cameraCapabilities.size == 0) {
-            Log.i(TAG, "Error: This device does not have any camera, bailing out")
-            requireActivity().finish()
-        }
-        return (cameraCapabilities[idx % cameraCapabilities.size].camSelector)
-    }
 
     // A lazy instance of the current fragment's view binding
     override val binding: FragmentVideoBinding by lazy { FragmentVideoBinding.inflate(layoutInflater) }
 
-    /**
-     * A display listener for orientation changes that do not trigger a configuration
-     * change, for example if we choose to override config change in manifest or for 180-degree
-     * orientation changes.
-     */
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) = Unit
         override fun onDisplayRemoved(displayId: Int) = Unit
@@ -130,42 +69,10 @@ class VideoFragment : BaseFragment<FragmentVideoBinding>(R.layout.fragment_video
         } ?: Unit
     }
 
-    init {
-        enumerationDeferred = lifecycleScope.async {
-            whenCreated {
-                val provider = ProcessCameraProvider.getInstance(requireContext()).await()
-
-                provider.unbindAll()
-                for (camSelector in arrayOf(
-                    CameraSelector.DEFAULT_BACK_CAMERA,
-                    CameraSelector.DEFAULT_FRONT_CAMERA
-                )) {
-                    try {
-                        // just get the camera.cameraInfo to query capabilities
-                        // we are not binding anything here.
-                        if (provider.hasCamera(camSelector)) {
-                            val camera = provider.bindToLifecycle(requireActivity(), camSelector)
-                            QualitySelector
-                                .getSupportedQualities(camera.cameraInfo)
-                                .filter { quality ->
-                                    listOf(Quality.UHD, Quality.FHD, Quality.HD, Quality.SD)
-                                        .contains(quality)
-                                }.also {
-                                    cameraCapabilities.add(CameraCapability(camSelector, it))
-                                }
-                        }
-                    } catch (exc: java.lang.Exception) {
-                        Log.e(TAG, "Camera Face $camSelector is not supported")
-                    }
-                }
-            }
-        }
-    }
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        hasGrid = prefs.getBoolean(KEY_GRID, false)
         initViews()
 
         displayManager.registerDisplayListener(displayListener, null)
@@ -190,74 +97,27 @@ class VideoFragment : BaseFragment<FragmentVideoBinding>(R.layout.fragment_video
                     } else {
                         when (recordingState) {
                             is VideoRecordEvent.Start -> {
-                                recording?.pause()
-                                binding.btnGallery.visibility = View.VISIBLE
-                            }
+                                recording?.stop()
+                                recording = null
 
-                            is VideoRecordEvent.Pause -> recording?.resume()
-                            is VideoRecordEvent.Resume -> recording?.pause()
+                            }
                             else -> throw IllegalStateException("recordingState in unknown state")
                         }
                     }
                 }
                 isRecording = false
             }
-
-            binding.btnGallery.apply {
-                setOnClickListener {
-                    // stopping: hide it after getting a click before we go to viewing fragment
-                    binding.btnGallery.visibility = View.INVISIBLE
-                    if (recording == null || recordingState is VideoRecordEvent.Finalize) {
-                        return@setOnClickListener
-                    }
-
-                    val rec = recording
-                    if (rec != null) {
-                        rec.stop()
-                        recording = null
-                    }
-                    binding.btnRecordVideo.setImageResource(R.drawable.ic_start)
-                }
-                // ensure the stop button is initialized disabled & invisible
-                visibility = View.INVISIBLE
-                isEnabled = false
-            }
-
-//            btnGallery.setOnClickListener { openPreview() }
             btnSwitchCamera.setOnClickListener { toggleCamera() }
-            btnGrid.setOnClickListener { toggleGrid() }
-            btnFlash.setOnClickListener { toggleFlash() }
 
-            // This swipe gesture adds a fun gesture to switch between video and photo
-            val swipeGestures = SwipeGestureDetector().apply {
-                setSwipeCallback(left = {
-                    Navigation.findNavController(view).navigate(R.id.action_video_to_camera)
-                })
-            }
-
-            val gestureDetectorCompat = GestureDetector(requireContext(), swipeGestures)
-            viewFinder.setOnTouchListener { _, motionEvent ->
-                if (gestureDetectorCompat.onTouchEvent(motionEvent)) return@setOnTouchListener false
-                return@setOnTouchListener true
-            }
         }
     }
 
-    /**
-     * Create some initial states
-     * */
     private fun initViews() {
-        binding.btnGrid.setImageResource(if (hasGrid) R.drawable.ic_grid_on else R.drawable.ic_grid_off)
-        binding.groupGridLines.visibility = if (hasGrid) View.VISIBLE else View.GONE
-
-
         captureLiveStatus.observe(viewLifecycleOwner) {
             binding.captureStatus?.apply {
                 post { text = it }
             }
         }
-//        captureLiveStatus.value = getString(androidx.camera.video.R.string.Idle)
-
         adjustInsets()
     }
 
@@ -270,9 +130,6 @@ class VideoFragment : BaseFragment<FragmentVideoBinding>(R.layout.fragment_video
             if (resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT) {
                 view.bottomMargin = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars()).bottom
             }
-        }
-        binding.btnFlash.onWindowInsets { view, windowInsets ->
-            view.topMargin = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars()).top
         }
     }
 
@@ -328,25 +185,19 @@ class VideoFragment : BaseFragment<FragmentVideoBinding>(R.layout.fragment_video
                     .getCameraCharacteristic(CameraCharacteristics.LENS_FACING) == CameraMetadata.LENS_FACING_BACK
             }
 
-            val supportedQualities = QualitySelector.getSupportedQualities(cameraInfo[0])
             val qualitySelector = QualitySelector.fromOrderedList(
                 listOf(Quality.SD, Quality.HD, Quality.FHD, Quality.UHD),
                 FallbackStrategy.higherQualityOrLowerThan(Quality.SD)
             )
 
-//            val quality = cameraCapabilities[cameraIndex].qualities[qualityIndex]
-//            val qualitySelector = QualitySelector.from(quality)
 
-
-            val recorder = Recorder.Builder()
-                .setExecutor(ContextCompat.getMainExecutor(requireContext())).setQualitySelector(qualitySelector)
+            val recorder = Recorder.Builder().setQualitySelector(qualitySelector)
                 .build()
             videoCapture = VideoCapture.withOutput(recorder)
 
-            localCameraProvider.unbindAll() // unbind the use-cases before rebinding them
+            localCameraProvider.unbindAll()
 
             try {
-                // Bind all use cases to the camera with lifecycle
                 camera = localCameraProvider.bindToLifecycle(
                     viewLifecycleOwner, // current lifecycle owner
                     lensFacing, // either front or back facing
@@ -362,15 +213,6 @@ class VideoFragment : BaseFragment<FragmentVideoBinding>(R.layout.fragment_video
         }, ContextCompat.getMainExecutor(requireContext()))
     }
 
-    data class CameraCapability(val camSelector: CameraSelector, val qualities: List<Quality>)
-
-    /**
-     *  Detecting the most suitable aspect ratio for current dimensions
-     *
-     *  @param width - preview width
-     *  @param height - preview height
-     *  @return suitable aspect ratio
-     */
     private fun aspectRatio(width: Int, height: Int): Int {
         val previewRatio = max(width, height).toDouble() / min(width, height)
         if (abs(previewRatio - RATIO_4_3_VALUE) <= abs(previewRatio - RATIO_16_9_VALUE)) {
@@ -400,6 +242,7 @@ class VideoFragment : BaseFragment<FragmentVideoBinding>(R.layout.fragment_video
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI
         )
             .setContentValues(contentValues)
+            .setDurationLimitMillis(21000)
             .build()
         recording = videoCapture?.output
             ?.prepareRecording(requireContext(), mediaStoreOutput)
@@ -408,75 +251,8 @@ class VideoFragment : BaseFragment<FragmentVideoBinding>(R.layout.fragment_video
                 if (event !is VideoRecordEvent.Status)
                     recordingState = event
                 updateUI(event)
-
-//                when (event) {
-//                    is VideoRecordEvent.Start -> {
-//                        recording?.pause()
-//                        binding.btnGallery.visibility = View.VISIBLE
-//                    }
-//                    is VideoRecordEvent.Finalize -> {
-//                        if (!event.hasError()) {
-//                            val msg = "Video capture succeeded: " +
-//                                    "${event.outputResults.outputUri}"
-//                            Toast.makeText(requireContext(), msg, Toast.LENGTH_SHORT)
-//                                .show()
-//                            Log.d(TAG, msg)
-//                        } else {
-//                            recording?.close()
-//                            recording = null
-//                            Log.e(TAG, "Video capture ends with error: " +
-//                                    "${event.error}")
-//                        }
-//                    }
-//                }
             }
         isRecording = !isRecording
-    }
-
-//    private fun enableUI(enable: Boolean) {
-//        arrayOf(captureViewBinding.cameraButton,
-//            captureViewBinding.captureButton,
-//            captureViewBinding.stopButton,
-//            captureViewBinding.audioSelection,
-//            captureViewBinding.qualitySelection).forEach {
-//            it.isEnabled = enable
-//        }
-//        // disable the camera button if no device to switch
-//        if (cameraCapabilities.size <= 1) {
-//            captureViewBinding.cameraButton.isEnabled = false
-//        }
-//        // disable the resolution list if no resolution to switch
-//        if (cameraCapabilities[cameraIndex].qualities.size <= 1) {
-//            captureViewBinding.qualitySelection.apply { isEnabled = false }
-//        }
-//    }
-
-    /**
-     * Turns on or off the grid on the screen
-     * */
-    private fun toggleGrid() = binding.btnGrid.toggleButton(
-        flag = hasGrid,
-        rotationAngle = 180f,
-        firstIcon = R.drawable.ic_grid_off,
-        secondIcon = R.drawable.ic_grid_on
-    ) { flag ->
-        hasGrid = flag
-        prefs.putBoolean(KEY_GRID, flag)
-        binding.groupGridLines.visibility = if (flag) View.VISIBLE else View.GONE
-    }
-
-    /**
-     * Turns on or off the flashlight
-     * */
-    private fun toggleFlash() = binding.btnFlash.toggleButton(
-        flag = flashMode == ImageCapture.FLASH_MODE_ON,
-        rotationAngle = 360f,
-        firstIcon = R.drawable.ic_flash_off,
-        secondIcon = R.drawable.ic_flash_on
-    ) { flag ->
-        isTorchOn = flag
-        flashMode = if (flag) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF
-        camera?.cameraControl?.enableTorch(flag)
     }
 
     override fun onPermissionGranted() {
@@ -486,56 +262,19 @@ class VideoFragment : BaseFragment<FragmentVideoBinding>(R.layout.fragment_video
                 // Setting current display ID
                 displayId = vf.display.displayId
                 startCamera()
-                lifecycleScope.launch(Dispatchers.IO) {
-                    // Do on IO Dispatcher
-//                    setLastPictureThumbnail()
-                }
-                camera?.cameraControl?.enableTorch(isTorchOn)
             }
         }
     }
-//
-//    private fun setLastPictureThumbnail() = binding.btnGallery.post {
-//        getMedia().firstOrNull() // check if there are any photos or videos in the app directory
-//            ?.let { setGalleryThumbnail(it.uri) } // preview the last one
-//            ?: binding.btnGallery.setImageResource(R.drawable.ic_no_picture) // or the default placeholder
-//    }
-
-//    private fun setGalleryThumbnail(savedUri: Uri?) = binding.btnGallery.let { btnGallery ->
-//        // Do the work on view's thread, this is needed, because the function is called in a Coroutine Scope's IO Dispatcher
-//        btnGallery.post {
-//            btnGallery.load(savedUri) {
-//                placeholder(R.drawable.ic_no_picture)
-//                transformations(CircleCropTransformation())
-//                listener(object : ImageRequest.Listener {
-//                    override fun onError(request: ImageRequest, result: ErrorResult) {
-//                        super.onError(request, result)
-//                        binding.btnGallery.load(savedUri) {
-//                            placeholder(R.drawable.ic_no_picture)
-//                            transformations(CircleCropTransformation())
-////                            fetcher(VideoFrameUriFetcher(requireContext()))
-//                        }
-//                    }
-//                })
-//            }
-//        }
-//    }
-
     override fun onBackPressed() = requireActivity().finish()
 
     override fun onStop() {
         super.onStop()
-        camera?.cameraControl?.enableTorch(false)
     }
 
     private fun updateUI(event: VideoRecordEvent) {
         val state = if (event is VideoRecordEvent.Status) recordingState.getNameString()
         else event.getNameString()
         when (event) {
-            is VideoRecordEvent.Status -> {
-                // placeholder: we update the UI with new status after this when() block,
-                // nothing needs to do here.
-            }
             is VideoRecordEvent.Start -> {
                 showUI(UiState.RECORDING, state)
             }
@@ -543,19 +282,14 @@ class VideoFragment : BaseFragment<FragmentVideoBinding>(R.layout.fragment_video
             is VideoRecordEvent.Finalize -> {
                 showUI(UiState.FINALIZED, state)
             }
-
-            is VideoRecordEvent.Pause -> {
-                binding.btnRecordVideo.setImageResource(R.drawable.ic_resume)
-            }
-
-            is VideoRecordEvent.Resume -> {
-                binding.btnRecordVideo.setImageResource(R.drawable.ic_pause)
-            }
         }
 
         val stats = event.recordingStats
         val time = java.util.concurrent.TimeUnit.NANOSECONDS.toSeconds(stats.recordedDurationNanos)
-        var text = "${time}second"
+        val minutes: Long = time / 60
+        val seconds: Long = time % 60
+        val formattedDuration = String.format("%02d:%02d", minutes, seconds)
+        var text = "$formattedDuration"
         if(event is VideoRecordEvent.Finalize)
             text = "${text}\nFile saved to: ${event.outputResults.outputUri}"
 
@@ -568,27 +302,17 @@ class VideoFragment : BaseFragment<FragmentVideoBinding>(R.layout.fragment_video
             when (state) {
                 UiState.IDLE -> {
                     it.btnRecordVideo.setImageResource(R.drawable.ic_start)
-                    it.btnGallery.visibility = View.INVISIBLE
                     it.btnSwitchCamera.visibility = View.VISIBLE
                 }
 
                 UiState.RECORDING -> {
                     it.btnSwitchCamera.visibility = View.INVISIBLE
-                    it.btnRecordVideo.setImageResource(R.drawable.ic_pause)
+                    it.btnRecordVideo.setImageResource(R.drawable.ic_stop)
                     it.btnRecordVideo.isEnabled = true
-                    it.btnGallery.visibility = View.VISIBLE
-                    it.btnGallery.isEnabled = true
                 }
 
                 UiState.FINALIZED -> {
                     it.btnRecordVideo.setImageResource(R.drawable.ic_start)
-                    it.btnGallery.visibility = View.INVISIBLE
-                }
-
-                else -> {
-                    val errorMsg = "Error: showUI($state) is not supported"
-                    Log.e(TAG, errorMsg)
-                    return
                 }
             }
             it.captureStatus?.text = status
@@ -599,12 +323,10 @@ class VideoFragment : BaseFragment<FragmentVideoBinding>(R.layout.fragment_video
         IDLE,       // Not recording, all UI controls are active.
         RECORDING,  // Camera is recording, only display Pause/Resume & Stop button.
         FINALIZED,  // Recording just completes, disable all RECORDING UI controls.
-        RECOVERY    // For future use.
     }
 
     companion object {
         private const val TAG = "CameraXDemo"
-
         const val KEY_GRID = "sPrefGridVideo"
 
         private const val RATIO_4_3_VALUE = 4.0 / 3.0 // aspect ratio 4x3

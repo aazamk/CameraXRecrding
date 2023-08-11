@@ -20,7 +20,6 @@ import androidx.fragment.app.Fragment
 import androidx.viewbinding.ViewBinding
 import com.google.android.material.snackbar.Snackbar
 import com.robertlevonyan.demo.camerax.R
-import com.robertlevonyan.demo.camerax.adapter.Media
 import java.io.File
 
 /**Parent class of all the fragments in this project*/
@@ -30,14 +29,7 @@ abstract class BaseFragment<B : ViewBinding>(private val fragmentLayout: Int) : 
      * */
     abstract val binding: B
 
-    // The Folder location where all the files will be stored
-    protected val outputDirectory: String by lazy {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            "${Environment.DIRECTORY_DCIM}/CameraXDemo/"
-        } else {
-            "${requireContext().getExternalFilesDir(Environment.DIRECTORY_DCIM)}/CameraXDemo/"
-        }
-    }
+
 
     // The permissions we need for the app to work properly
     private val permissions = mutableListOf(
@@ -85,87 +77,6 @@ abstract class BaseFragment<B : ViewBinding>(private val fragmentLayout: Int) : 
             permissionRequest.launch(permissions.toTypedArray())
         }
     }
-
-    protected fun getMedia(): List<Media> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        getMediaQPlus()
-    } else {
-        getMediaQMinus()
-    }.reversed()
-
-    private fun getMediaQPlus(): List<Media> {
-        val items = mutableListOf<Media>()
-        val contentResolver = requireContext().applicationContext.contentResolver
-
-        contentResolver.query(
-            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-            arrayOf(
-                MediaStore.Video.Media._ID,
-                MediaStore.Video.Media.RELATIVE_PATH,
-                MediaStore.Video.Media.DATE_TAKEN,
-            ),
-            null,
-            null,
-            "${MediaStore.Video.Media.DISPLAY_NAME} ASC"
-        )?.use { cursor ->
-            val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
-            val pathColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.RELATIVE_PATH)
-            val dateColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_TAKEN)
-
-            while (cursor.moveToNext()) {
-                val id = cursor.getLong(idColumn)
-                val path = cursor.getString(pathColumn)
-                val date = cursor.getLong(dateColumn)
-
-                val contentUri: Uri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
-
-                if (path == outputDirectory) {
-                    items.add(Media(contentUri, true, date))
-                }
-            }
-        }
-
-        contentResolver.query(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            arrayOf(
-                MediaStore.Images.Media._ID,
-                MediaStore.Images.Media.RELATIVE_PATH,
-                MediaStore.Images.Media.DATE_TAKEN,
-            ),
-            null,
-            null,
-            "${MediaStore.Images.Media.DISPLAY_NAME} ASC"
-        )?.use { cursor ->
-            val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-            val pathColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.RELATIVE_PATH)
-            val dateColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
-
-            while (cursor.moveToNext()) {
-                val id = cursor.getLong(idColumn)
-                val path = cursor.getString(pathColumn)
-                val date = cursor.getLong(dateColumn)
-
-                val contentUri: Uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-
-                if (path == outputDirectory) {
-                    items.add(Media(contentUri, false, date))
-                }
-            }
-        }
-        return items
-    }
-
-    private fun getMediaQMinus(): List<Media> {
-        val items = mutableListOf<Media>()
-
-        File(outputDirectory).listFiles()?.forEach {
-            val authority = requireContext().applicationContext.packageName + ".provider"
-            val mediaUri = FileProvider.getUriForFile(requireContext(), authority, it)
-            items.add(Media(mediaUri, it.extension == "mp4", it.lastModified()))
-        }
-
-        return items
-    }
-
     /**
      * Check for the permissions
      */
